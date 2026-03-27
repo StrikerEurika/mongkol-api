@@ -18,6 +18,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole), default=UserRole.STAFF)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_refund: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped["DateTime"] = mapped_column(
         DateTime(timezone=True), server_default=func.now())

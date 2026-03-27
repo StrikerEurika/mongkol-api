@@ -9,6 +9,7 @@ class SaleStatus(enum.Enum):
     SUBMITTED = "submitted"
     APPROVED = "approved"
     LOCKED = "locked"
+    VOIDED = "voided"
 
 
 class PaymentMethod(enum.Enum):
@@ -24,10 +25,11 @@ class Sale(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_datetime: Mapped["DateTime"] = mapped_column(
         DateTime(timezone=True), server_default=func.now())
-    total_amount: Mapped[float] = mapped_column(Numeric(12, 2))
+    total_amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
+    total_amount_khr: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     payment_method: Mapped[PaymentMethod] = mapped_column(Enum(PaymentMethod))
-    discount_amount: Mapped[float | None] = mapped_column(
-        Numeric(12, 2), nullable=True)
+    discount_amount_usd: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    discount_amount_khr: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_by_user_id: Mapped[int] = mapped_column(
@@ -41,3 +43,4 @@ class Sale(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     created_by = relationship("User")
+    items = relationship("SaleItem", back_populates="sale", cascade="all, delete-orphan")

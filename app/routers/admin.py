@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
+from sqlalchemy.orm import selectinload
 from datetime import datetime, date, timedelta
 from app.db.session import get_db
-from app.core.deps import require_admin, get_current_user
+from app.core.deps import require_admin
 from app.models.sale import Sale, SaleStatus, PaymentMethod
 from app.models.user import User, UserRole
 from app.schemas.sale import SaleOut
+from app.schemas.user import UserUpdate, UserOut
 from app.services.sales_service import admin_set_status
 from app.utils.csv_export import rows_to_csv
 
@@ -23,7 +25,7 @@ async def admin_list_sales(
     payment_method: PaymentMethod | None = Query(default=None),
     limit: int = Query(default=200, le=1000),
 ):
-    stmt = select(Sale)
+    stmt = select(Sale).options(selectinload(Sale.items))
 
     if start:
         stmt = stmt.where(Sale.sale_datetime >= start)
@@ -49,8 +51,8 @@ async def approve_sale(
 ):
     sale = await admin_set_status(db, admin_id=admin.id, sale_id=sale_id, new_status=SaleStatus.APPROVED)
     await db.commit()
-    await db.refresh(sale)
-    return sale
+    res = await db.execute(select(Sale).options(selectinload(Sale.items)).where(Sale.id == sale.id))
+    return res.scalar_one()
 
 
 @router.post("/sales/{sale_id}/lock", response_model=SaleOut)
@@ -61,8 +63,8 @@ async def lock_sale(
 ):
     sale = await admin_set_status(db, admin_id=admin.id, sale_id=sale_id, new_status=SaleStatus.LOCKED)
     await db.commit()
-    await db.refresh(sale)
-    return sale
+    res = await db.execute(select(Sale).options(selectinload(Sale.items)).where(Sale.id == sale.id))
+    return res.scalar_one()
 
 
 @router.get("/dashboard")
@@ -70,35 +72,29 @@ async def admin_dashboard(
     db: AsyncSession = Depends(get_db),
     admin=Depends(require_admin),
 ):
-    # today boundaries (server timezone; later you can use Asia/Phnom_Penh explicitly)
     today = date.today()
     start_today = datetime.combine(today, datetime.min.time())
     end_today = start_today + timedelta(days=1)
 
-    # month boundaries
     start_month = date(today.year, today.month, 1)
     start_month_dt = datetime.combine(start_month, datetime.min.time())
-    next_month = (start_month.replace(day=28) +
-                  timedelta(days=4)).replace(day=1)
+    next_month = (start_month.replace(day=28) + timedelta(days=4)).replace(day=1)
     next_month_dt = datetime.combine(next_month, datetime.min.time())
 
-    # totals
     total_today = await db.scalar(
-        select(func.coalesce(func.sum(Sale.total_amount), 0))
+        select(func.coalesce(func.sum(Sale.total_amount_usd), 0))
         .where(Sale.sale_datetime >= start_today, Sale.sale_datetime < end_today)
         .where(Sale.status.in_([SaleStatus.SUBMITTED, SaleStatus.APPROVED, SaleStatus.LOCKED]))
     )
 
     total_month = await db.scalar(
-        select(func.coalesce(func.sum(Sale.total_amount), 0))
+        select(func.coalesce(func.sum(Sale.total_amount_usd), 0))
         .where(Sale.sale_datetime >= start_month_dt, Sale.sale_datetime < next_month_dt)
         .where(Sale.status.in_([SaleStatus.SUBMITTED, SaleStatus.APPROVED, SaleStatus.LOCKED]))
     )
 
-    # leaderboard by staff (month)
     leaderboard = (await db.execute(
-        select(Sale.created_by_user_id, func.coalesce(
-            func.sum(Sale.total_amount), 0).label("total"))
+        select(Sale.created_by_user_id, func.coalesce(func.sum(Sale.total_amount_usd), 0).label("total"))
         .where(Sale.sale_datetime >= start_month_dt, Sale.sale_datetime < next_month_dt)
         .where(Sale.status.in_([SaleStatus.SUBMITTED, SaleStatus.APPROVED, SaleStatus.LOCKED]))
         .group_by(Sale.created_by_user_id)
@@ -106,7 +102,6 @@ async def admin_dashboard(
         .limit(10)
     )).all()
 
-    # missing entries alert: staff with zero submitted/approved/locked sales today
     staff_ids_with_sales_today = (await db.execute(
         select(Sale.created_by_user_id)
         .where(Sale.sale_datetime >= start_today, Sale.sale_datetime < end_today)
@@ -121,8 +116,8 @@ async def admin_dashboard(
     )).all()
 
     return {
-        "total_today": float(total_today or 0),
-        "total_month": float(total_month or 0),
+        "total_today_usd": float(total_today or 0),
+        "total_month_usd": float(total_month or 0),
         "leaderboard": [{"user_id": uid, "total": float(total)} for (uid, total) in leaderboard],
         "missing_entries_today": [{"user_id": uid, "name": name} for (uid, name) in missing_staff],
     }
@@ -149,9 +144,9 @@ async def export_sales_csv(
         rows.append({
             "id": s.id,
             "sale_datetime": s.sale_datetime.isoformat(),
-            "total_amount": float(s.total_amount),
+            "total_amount_usd": float(s.total_amount_usd),
+            "total_amount_khr": float(s.total_amount_khr),
             "payment_method": s.payment_method.value,
-            "discount_amount": float(s.discount_amount) if s.discount_amount is not None else "",
             "status": s.status.value,
             "created_by_user_id": s.created_by_user_id,
         })
@@ -162,3 +157,33 @@ async def export_sales_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=sales_export.csv"},
     )
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: int,
+    payload: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    res = await db.execute(select(User).where(User.id == user_id))
+    user = res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(user, k, v)
+        
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+@router.post("/sales/{sale_id}/void", response_model=SaleOut)
+async def void_sale(
+    sale_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    from app.services.sales_service import void_sale as srv_void_sale
+    sale = await srv_void_sale(db, admin_id=admin.id, sale_id=sale_id)
+    res = await db.execute(select(Sale).options(selectinload(Sale.items)).where(Sale.id == sale_id))
+    return res.scalar_one()
