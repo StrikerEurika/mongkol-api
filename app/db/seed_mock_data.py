@@ -14,6 +14,7 @@ from app.models.sale import Sale, SaleStatus, PaymentMethod
 from app.models.target import Target
 from app.models.product import Product
 from app.models.sale_item import SaleItem
+from app.core.security import hash_password
 
 
 def _month_start(dt: date) -> date:
@@ -42,6 +43,7 @@ async def seed_users(session: AsyncSession, n_staff: int = 5) -> Sequence[User]:
         email="admin@example.com",
         role=UserRole.ADMIN,
         is_active=True,
+        password_hash=hash_password("password"),
     )
     users.append(admin)
 
@@ -52,6 +54,7 @@ async def seed_users(session: AsyncSession, n_staff: int = 5) -> Sequence[User]:
                 email=f"staff{i}@example.com",
                 role=UserRole.STAFF,
                 is_active=True,
+                password_hash=hash_password("password"),
             )
         )
 
@@ -69,10 +72,34 @@ async def seed_products(session: AsyncSession) -> Sequence[Product]:
         return existing
 
     products = [
-        Product(name_km="ទៀនធំ", name_en="Large Candle", price_usd=5.00, price_khr=20000, stock_quantity=100),
-        Product(name_km="ទៀនតូច", name_en="Small Candle", price_usd=2.00, price_khr=8000, stock_quantity=200),
-        Product(name_km="ធូប", name_en="Incense Sticks", price_usd=1.50, price_khr=6000, stock_quantity=500),
-        Product(name_km="ឈុតសែន", name_en="Offering Set", price_usd=15.00, price_khr=60000, stock_quantity=50),
+        Product(
+            name_km="ទៀនធំ",
+            name_en="Large Candle",
+            price_usd=5.00,
+            price_khr=20000,
+            stock_quantity=100,
+        ),
+        Product(
+            name_km="ទៀនតូច",
+            name_en="Small Candle",
+            price_usd=2.00,
+            price_khr=8000,
+            stock_quantity=200,
+        ),
+        Product(
+            name_km="ធូប",
+            name_en="Incense Sticks",
+            price_usd=1.50,
+            price_khr=6000,
+            stock_quantity=500,
+        ),
+        Product(
+            name_km="ឈុតសែន",
+            name_en="Offering Set",
+            price_usd=15.00,
+            price_khr=60000,
+            stock_quantity=50,
+        ),
     ]
     session.add_all(products)
     await session.commit()
@@ -81,7 +108,9 @@ async def seed_products(session: AsyncSession) -> Sequence[Product]:
     return products
 
 
-async def seed_targets(session: AsyncSession, users: Sequence[User], months: int = 3) -> None:
+async def seed_targets(
+    session: AsyncSession, users: Sequence[User], months: int = 3
+) -> None:
     # Create monthly targets for each user for the past N months
     today = date.today()
     month_starts = []
@@ -89,7 +118,7 @@ async def seed_targets(session: AsyncSession, users: Sequence[User], months: int
     for _ in range(months):
         month_starts.append(d)
         # go to previous month
-        prev = (d.replace(day=1) - timedelta(days=1))
+        prev = d.replace(day=1) - timedelta(days=1)
         d = _month_start(prev)
 
     for u in users:
@@ -99,38 +128,53 @@ async def seed_targets(session: AsyncSession, users: Sequence[User], months: int
         for m in month_starts:
             # Check existing unique (user_id, period_month)
             exists = (
-                await session.execute(
-                    select(Target).where(Target.user_id ==
-                                         u.id, Target.period_month == m)
+                (
+                    await session.execute(
+                        select(Target).where(
+                            Target.user_id == u.id, Target.period_month == m
+                        )
+                    )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if exists:
                 continue
             target_amount = round(random.uniform(1000, 5000), 2)
-            session.add(Target(user_id=u.id, period_month=m,
-                        target_amount=target_amount))
+            session.add(
+                Target(user_id=u.id, period_month=m, target_amount=target_amount)
+            )
 
     await session.commit()
 
 
-async def seed_sales(session: AsyncSession, users: Sequence[User], products: Sequence[Product], n_sales: int = 50) -> None:
+async def seed_sales(
+    session: AsyncSession,
+    users: Sequence[User],
+    products: Sequence[Product],
+    n_sales: int = 50,
+) -> None:
     staff_users = [u for u in users if u.role == UserRole.STAFF]
     if not staff_users or not products:
         return
 
     statuses = [SaleStatus.DRAFT, SaleStatus.SUBMITTED, SaleStatus.APPROVED]
-    payments = [PaymentMethod.CASH, PaymentMethod.CARD,
-                PaymentMethod.TRANSFER, PaymentMethod.EWALLET]
+    payments = [
+        PaymentMethod.CASH,
+        PaymentMethod.CARD,
+        PaymentMethod.TRANSFER,
+        PaymentMethod.EWALLET,
+    ]
 
     # Spread sales across the last ~30 days
     now = datetime.utcnow()
     for i in range(n_sales):
         creator = random.choice(staff_users)
-        
+
         sale_items = []
         total_usd = 0.0
         total_khr = 0.0
-        
+
         # Pick 1 to 3 random products
         for _ in range(random.randint(1, 3)):
             prod = random.choice(products)
@@ -139,7 +183,7 @@ async def seed_sales(session: AsyncSession, users: Sequence[User], products: Seq
             sub_khr = float(prod.price_khr) * qty
             total_usd += sub_usd
             total_khr += sub_khr
-            
+
             sale_items.append(
                 SaleItem(
                     product_id=prod.id,
@@ -147,15 +191,22 @@ async def seed_sales(session: AsyncSession, users: Sequence[User], products: Seq
                     unit_price_usd=prod.price_usd,
                     unit_price_khr=prod.price_khr,
                     subtotal_usd=sub_usd,
-                    subtotal_khr=sub_khr
+                    subtotal_khr=sub_khr,
                 )
             )
 
-        discount_usd = round(random.uniform(0, total_usd * 0.15), 2) if random.random() < 0.5 else 0.0
+        discount_usd = (
+            round(random.uniform(0, total_usd * 0.15), 2)
+            if random.random() < 0.5
+            else 0.0
+        )
         discount_khr = discount_usd * 4000
-        
-        dt = now - timedelta(days=random.randint(0, 30),
-                             hours=random.randint(0, 23), minutes=random.randint(0, 59))
+
+        dt = now - timedelta(
+            days=random.randint(0, 30),
+            hours=random.randint(0, 23),
+            minutes=random.randint(0, 59),
+        )
         sale = Sale(
             sale_datetime=dt,
             total_amount_usd=total_usd,
@@ -166,14 +217,16 @@ async def seed_sales(session: AsyncSession, users: Sequence[User], products: Seq
             note=("Test order" if random.random() < 0.2 else None),
             created_by_user_id=creator.id,
             status=random.choice(statuses),
-            items=sale_items
+            items=sale_items,
         )
         session.add(sale)
 
     await session.commit()
 
 
-async def run_seed(reset: bool = False, staff_count: int = 5, sales_count: int = 50, months: int = 3) -> None:
+async def run_seed(
+    reset: bool = False, staff_count: int = 5, sales_count: int = 50, months: int = 3
+) -> None:
     # Ensure tables exist
     await init_models()
     async with AsyncSessionLocal() as session:
@@ -188,16 +241,22 @@ async def run_seed(reset: bool = False, staff_count: int = 5, sales_count: int =
 def _parse_args():
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Seed mock data for API testing")
-    parser.add_argument("--reset", action="store_true",
-                        help="Clear existing data before seeding")
-    parser.add_argument("--staff", type=int, default=5,
-                        help="Number of staff users to create")
-    parser.add_argument("--sales", type=int, default=50,
-                        help="Number of sales to create")
-    parser.add_argument("--months", type=int, default=3,
-                        help="Number of past months to create targets for")
+    parser = argparse.ArgumentParser(description="Seed mock data for API testing")
+    parser.add_argument(
+        "--reset", action="store_true", help="Clear existing data before seeding"
+    )
+    parser.add_argument(
+        "--staff", type=int, default=5, help="Number of staff users to create"
+    )
+    parser.add_argument(
+        "--sales", type=int, default=50, help="Number of sales to create"
+    )
+    parser.add_argument(
+        "--months",
+        type=int,
+        default=3,
+        help="Number of past months to create targets for",
+    )
     return parser.parse_args()
 
 
@@ -207,5 +266,11 @@ if __name__ == "__main__":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     args = _parse_args()
-    asyncio.run(run_seed(reset=args.reset, staff_count=args.staff,
-                sales_count=args.sales, months=args.months))
+    asyncio.run(
+        run_seed(
+            reset=args.reset,
+            staff_count=args.staff,
+            sales_count=args.sales,
+            months=args.months,
+        )
+    )

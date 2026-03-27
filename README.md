@@ -63,3 +63,6 @@ uv run python -m app.db.seed_mock_data --reset
 - **Products**: Basic candle lineup (` Large Candle`, `Small Candle`, `Incense Sticks`, `Offering Set`) with default USD and KHR pricing.
 - **Admin Account**: Email: `admin@example.com`
 - **Staff Accounts**: Email: `staff1@example.com`, `staff2@example.com`, etc.
+
+### AI models used
+- **nvidia/nemotron-3-super-120b-a12b**: For code generation.

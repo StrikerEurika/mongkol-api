@@ -15,12 +15,14 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(125))
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole), default=UserRole.STAFF)
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.STAFF)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     can_refund: Mapped[bool] = mapped_column(Boolean, default=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
     created_at: Mapped["DateTime"] = mapped_column(
-        DateTime(timezone=True), server_default=func.now())
+        DateTime(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped["DateTime"] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
